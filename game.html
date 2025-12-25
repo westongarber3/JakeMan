@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Infinite Block Puzzle - 4 Direction Facing</title>
+  <style>
+    body { margin: 0; background: #222; display: flex; justify-content: center; align-items: center; height: 100vh; flex-direction: column; }
+    canvas { background: #ddd; display: block; margin-bottom: 10px; }
+    #levelDisplay {
+      font-family: monospace;
+      font-size: 20px;
+      color: limegreen;
+      user-select: none;
+    }
+    button { font-size: 16px; padding: 8px 12px; }
+  </style>
+</head>
+<body>
+
+  <canvas id="game" width="600" height="400"></canvas>
+  <div id="levelDisplay">Level: 1</div>
+  <button id="resetBtn">Reset Level</button>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const levelDisplay = document.getElementById('levelDisplay');
+
+    const TILE_SIZE = 40;
+    const ROWS = 10;
+    const COLS = 15;
+
+    const BLOCK_EMPTY = 0;
+    const BLOCK_PICKUPABLE = 1;
+    const BLOCK_DOOR = 2;
+    const BLOCK_SOLID = 3;
+
+    let currentLevelNumber = 1;
+
+    let level = [];
+
+    const player = {
+      x: TILE_SIZE * 2,
+      y: TILE_SIZE * 7,
+      width: TILE_SIZE * 0.8,
+      height: TILE_SIZE * 0.9,
+      dx: 0,
+      dy: 0,
+      speed: 3,
+      onGround: false,
+      jumping: false,
+      carryingBlock: false,
+      facing: 'right', // can be 'left', 'right', 'up', 'down'
+    };
+
+    const GRAVITY = 0.5;
+    const JUMP_POWER = -8.5;
+
+    let keys = {};
+    let pickupCooldown = false;
+
+    const dadImage = new Image();
+    dadImage.src = 'dad.png';
+
+    dadImage.onload = () => {
+      generateLevel(currentLevelNumber);
+      gameLoop();
+    };
+
+    window.addEventListener('keydown', e => {
+      keys[e.key] = true;
+    });
+    window.addEventListener('keyup', e => {
+      keys[e.key] = false;
+    });
+
+    function isSolidBlock(tile) {
+      return tile === BLOCK_PICKUPABLE || tile === BLOCK_SOLID;
+    }
+
+    function generateLevel(levelNumber) {
+      level = [];
+      for(let y=0; y<ROWS; y++){
+        level[y] = [];
+        for(let x=0; x<COLS; x++){
+          level[y][x] = BLOCK_EMPTY;
+        }
+      }
+
+      for(let x=0; x<COLS; x++){
+        level[ROWS-1][x] = BLOCK_SOLID; // floor
+        level[0][x] = BLOCK_SOLID;      // ceiling
+      }
+
+      for(let y=0; y<ROWS; y++){
+        level[y][0] = BLOCK_SOLID;      // left wall
+        level[y][COLS-1] = BLOCK_SOLID; // right wall
+      }
+
+      const gapChance = 0.15;
+      const pickupDensity = 0.75;
+
+      for(let y=3; y<8; y++) {
+        for(let x=1; x<COLS-1; x++) {
+          if (y >= 6) {
+            level[y][x] = Math.random() < pickupDensity ? BLOCK_PICKUPABLE : BLOCK_SOLID;
+          } else {
+            if (Math.random() > gapChance) {
+              level[y][x] = Math.random() < pickupDensity ? BLOCK_PICKUPABLE : BLOCK_SOLID;
+            }
+          }
+        }
+      }
+
+      // Door on right side
+      const doorY = 4 + Math.floor(Math.random() * 3);
+      level[doorY][COLS - 2] = BLOCK_DOOR;
+
+      const spawnX = 2;
+      const spawnY = 7;
+      level[spawnY][spawnX] = BLOCK_EMPTY;
+
+      player.x = TILE_SIZE * spawnX;
+      player.y = TILE_SIZE * spawnY;
+      player.dx = 0;
+      player.dy = 0;
+      player.carryingBlock = false;
+      player.onGround = false;
+      player.jumping = false;
+
+      levelDisplay.textContent = `Level: ${levelNumber}`;
+    }
+
+    function handlePickupPlace() {
+      if (pickupCooldown) return;
+
+      const px = Math.floor((player.x + player.width / 2) / TILE_SIZE);
+      const py = Math.floor((player.y + player.height / 2) / TILE_SIZE);
+
+      let bx = px;
+      let by = py;
+
+      switch(player.facing) {
+        case 'right': bx = px + 1; break;
+        case 'left': bx = px - 1; break;
+        case 'up': by = py - 1; break;
+        case 'down': by = py + 1; break;
+      }
+
+      if (by < 0 || by >= ROWS || bx < 0 || bx >= COLS) return;
+
+      if (!player.carryingBlock) {
+        if (level[by][bx] === BLOCK_PICKUPABLE) {
+          level[by][bx] = BLOCK_EMPTY;
+          player.carryingBlock = true;
+        }
+      } else {
+        if (level[by][bx] === BLOCK_EMPTY) {
+          const neighbors = [
+            [bx, by - 1], [bx, by + 1], [bx - 1, by], [bx + 1, by]
+          ];
+          const canPlace = neighbors.some(([nx, ny]) =>
+            ny >= 0 && ny < ROWS && nx >= 0 && nx < COLS && isSolidBlock(level[ny][nx])
+          );
+          if (canPlace) {
+            level[by][bx] = BLOCK_PICKUPABLE;
+            player.carryingBlock = false;
+          }
+        }
+      }
+
+      pickupCooldown = true;
+      setTimeout(() => pickupCooldown = false, 150);
+    }
+
+    function handleCollisions(axis) {
+      if (axis === 'horizontal') {
+        if (player.dx < 0) {
+          const leftTile = Math.floor(player.x / TILE_SIZE);
+          const topTile = Math.floor(player.y / TILE_SIZE);
+          const bottomTile = Math.floor((player.y + player.height - 1) / TILE_SIZE);
+          for (let y = topTile; y <= bottomTile; y++) {
+            if (level[y] && isSolidBlock(level[y][leftTile])) {
+              player.x = (leftTile + 1) * TILE_SIZE;
+              break;
+            }
+          }
+        } else if (player.dx > 0) {
+          const rightTile = Math.floor((player.x + player.width) / TILE_SIZE);
+          const topTile = Math.floor(player.y / TILE_SIZE);
+          const bottomTile = Math.floor((player.y + player.height - 1) / TILE_SIZE);
+          for (let y = topTile; y <= bottomTile; y++) {
+            if (level[y] && isSolidBlock(level[y][rightTile])) {
+              player.x = rightTile * TILE_SIZE - player.width;
+              break;
+            }
+          }
+        }
+      }
+
+      if (axis === 'vertical') {
+        if (player.dy > 0) {
+          const bottomTile = Math.floor((player.y + player.height) / TILE_SIZE);
+          const leftTile = Math.floor(player.x / TILE_SIZE);
+          const rightTile = Math.floor((player.x + player.width - 1) / TILE_SIZE);
+          let onGround = false;
+          for (let x = leftTile; x <= rightTile; x++) {
+            if (level[bottomTile] && isSolidBlock(level[bottomTile][x])) {
+              player.y = bottomTile * TILE_SIZE - player.height;
+              player.dy = 0;
+              onGround = true;
+              break;
+            }
+          }
+          player.onGround = onGround;
+          if (onGround) player.jumping = false;
+        } else if (player.dy < 0) {
+          const topTile = Math.floor(player.y / TILE_SIZE);
+          const leftTile = Math.floor(player.x / TILE_SIZE);
+          const rightTile = Math.floor((player.x + player.width - 1) / TILE_SIZE);
+          for (let x = leftTile; x <= rightTile; x++) {
+            if (level[topTile] && isSolidBlock(level[topTile][x])) {
+              player.y = (topTile + 1) * TILE_SIZE;
+              player.dy = 0;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    function resetLevel() {
+      generateLevel(currentLevelNumber);
+    }
+
+    function update() {
+      if (keys['ArrowLeft']) {
+        player.dx = -player.speed;
+        player.facing = 'left';
+      } else if (keys['ArrowRight']) {
+        player.dx = player.speed;
+        player.facing = 'right';
+      } else {
+        player.dx = 0;
+      }
+
+      if (keys['ArrowUp']) {
+        if (player.onGround) {
+          player.dy = JUMP_POWER;
+          player.jumping = true;
+          player.onGround = false;
+        }
+        player.facing = 'up';
+      } else if (keys['ArrowDown']) {
+        player.facing = 'down';
+      }
+
+      player.dy += GRAVITY;
+
+      player.x += player.dx;
+      handleCollisions('horizontal');
+
+      player.y += player.dy;
+      handleCollisions('vertical');
+
+      // Door detection
+      const playerTileX = Math.floor((player.x + player.width / 2) / TILE_SIZE);
+      const playerTileY = Math.floor((player.y + player.height) / TILE_SIZE);
+      if (level[playerTileY] && level[playerTileY][playerTileX] === BLOCK_DOOR) {
+        currentLevelNumber++;
+        generateLevel(currentLevelNumber);
+      }
+
+      if (keys[' ']) {
+        handlePickupPlace();
+        keys[' '] = false;
+      }
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      for(let y=0; y<ROWS; y++){
+        for(let x=0; x<COLS; x++){
+          if(level[y][x] === BLOCK_PICKUPABLE){
+            ctx.fillStyle = 'saddlebrown';
+            ctx.fillRect(x*TILE_SIZE, y*TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          } else if(level[y][x] === BLOCK_SOLID){
+            ctx.fillStyle = 'grey';
+            ctx.fillRect(x*TILE_SIZE, y*TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          } else if(level[y][x] === BLOCK_DOOR){
+            ctx.fillStyle = 'limegreen';
+            ctx.fillRect(x*TILE_SIZE, y*TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          }
+        }
+      }
+
+      ctx.drawImage(dadImage, player.x, player.y, player.width, player.height);
+
+      // Draw facing arrow
+      ctx.fillStyle = 'black';
+      const arrowSize = 8;
+      let arrowX = player.x;
+      let arrowY = player.y + player.height / 2 - arrowSize / 2;
+      ctx.beginPath();
+      switch(player.facing) {
+        case 'right':
+          arrowX = player.x + player.width - arrowSize;
+          ctx.moveTo(arrowX, arrowY);
+          ctx.lineTo(arrowX + arrowSize, arrowY + arrowSize / 2);
+          ctx.lineTo(arrowX, arrowY + arrowSize);
+          break;
+        case 'left':
+          arrowX = player.x;
+          ctx.moveTo(arrowX + arrowSize, arrowY);
+          ctx.lineTo(arrowX, arrowY + arrowSize / 2);
+          ctx.lineTo(arrowX + arrowSize, arrowY + arrowSize);
+          break;
+        case 'up':
+          arrowX = player.x + player.width / 2;
+          arrowY = player.y;
+          ctx.moveTo(arrowX - arrowSize / 2, arrowY + arrowSize);
+          ctx.lineTo(arrowX, arrowY);
+          ctx.lineTo(arrowX + arrowSize / 2, arrowY + arrowSize);
+          break;
+        case 'down':
+          arrowX = player.x + player.width / 2;
+          arrowY = player.y + player.height - arrowSize;
+          ctx.moveTo(arrowX - arrowSize / 2, arrowY);
+          ctx.lineTo(arrowX, arrowY + arrowSize);
+          ctx.lineTo(arrowX + arrowSize / 2, arrowY);
+          break;
+      }
+      ctx.fill();
+    }
+
+    function gameLoop() {
+      update();
+      draw();
+      requestAnimationFrame(gameLoop);
+    }
+
+    document.getElementById('resetBtn').addEventListener('click', resetLevel);
+
+  </script>
+
+</body>
+</html>
